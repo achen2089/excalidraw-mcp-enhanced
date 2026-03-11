@@ -132,6 +132,9 @@ export default function App() {
           case "set_viewport":
             handleViewport(data, a);
             break;
+          case "mermaid_convert":
+            handleMermaid(data, a);
+            break;
         }
       };
     };
@@ -201,6 +204,29 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ requestId: data.requestId, error: (e as Error).message }),
       });
+    }
+  }
+
+  async function handleMermaid(data: any, a: ExcalidrawImperativeAPI) {
+    try {
+      const mermaidLib = await import("@excalidraw/mermaid-to-excalidraw");
+      const { elements: mermaidElements, files } = await mermaidLib.parseMermaidToExcalidraw(data.mermaidDiagram, { fontSize: 16 });
+      if (mermaidElements && mermaidElements.length > 0) {
+        const converted = convertToExcalidrawElements(mermaidElements as any, { regenerateIds: false });
+        const current = a.getSceneElements();
+        applyScene({ elements: [...current, ...converted] });
+        if (files) a.addFiles(Object.values(files) as any);
+        setTimeout(async () => {
+          const els = a.getSceneElements().filter((e) => !e.isDeleted);
+          await fetch("/api/elements/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ elements: els }),
+          });
+        }, 500);
+      }
+    } catch (e) {
+      console.error("Mermaid conversion failed:", e);
     }
   }
 

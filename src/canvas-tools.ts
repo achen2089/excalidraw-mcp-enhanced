@@ -386,4 +386,540 @@ export function registerCanvasTools(server: McpServer): void {
       }
     },
   );
+
+  // ═══════════════════════════════════════════════════════════════
+  // Phase 2 Tools
+  // ═══════════════════════════════════════════════════════════════
+
+  // ─── align_elements ───
+  server.registerTool(
+    "align_elements",
+    {
+      description: "Align elements to a specific position (left, center, right, top, middle, bottom). Need at least 2 elements.",
+      inputSchema: z.object({
+        elementIds: z.array(z.string()),
+        alignment: z.enum(["left", "center", "right", "top", "middle", "bottom"]),
+      }),
+    },
+    async ({ elementIds, alignment }): Promise<CallToolResult> => {
+      try {
+        const elements: any[] = [];
+        for (const id of elementIds) {
+          const data = await canvasGet(`/api/elements/${id}`);
+          if (data.element) elements.push(data.element);
+        }
+        if (elements.length < 2) return err("Need at least 2 elements to align");
+
+        let updateFn: (el: any) => Record<string, number>;
+        switch (alignment) {
+          case "left": {
+            const minX = Math.min(...elements.map((e) => e.x));
+            updateFn = () => ({ x: minX });
+            break;
+          }
+          case "right": {
+            const maxR = Math.max(...elements.map((e) => e.x + (e.width || 0)));
+            updateFn = (el) => ({ x: maxR - (el.width || 0) });
+            break;
+          }
+          case "center": {
+            const centers = elements.map((e) => e.x + (e.width || 0) / 2);
+            const avg = centers.reduce((a, b) => a + b, 0) / centers.length;
+            updateFn = (el) => ({ x: avg - (el.width || 0) / 2 });
+            break;
+          }
+          case "top": {
+            const minY = Math.min(...elements.map((e) => e.y));
+            updateFn = () => ({ y: minY });
+            break;
+          }
+          case "bottom": {
+            const maxB = Math.max(...elements.map((e) => e.y + (e.height || 0)));
+            updateFn = (el) => ({ y: maxB - (el.height || 0) });
+            break;
+          }
+          case "middle": {
+            const middles = elements.map((e) => e.y + (e.height || 0) / 2);
+            const avgM = middles.reduce((a, b) => a + b, 0) / middles.length;
+            updateFn = (el) => ({ y: avgM - (el.height || 0) / 2 });
+            break;
+          }
+        }
+
+        let count = 0;
+        for (const el of elements) {
+          const coords = updateFn(el);
+          await canvasPut(`/api/elements/${el.id}`, coords);
+          count++;
+        }
+        return ok(`Aligned ${count} elements (${alignment})`);
+      } catch (e) {
+        return err(`Align failed: ${(e as Error).message}`);
+      }
+    },
+  );
+
+  // ─── distribute_elements ───
+  server.registerTool(
+    "distribute_elements",
+    {
+      description: "Distribute elements evenly horizontally or vertically. Need at least 3 elements.",
+      inputSchema: z.object({
+        elementIds: z.array(z.string()),
+        direction: z.enum(["horizontal", "vertical"]),
+      }),
+    },
+    async ({ elementIds, direction }): Promise<CallToolResult> => {
+      try {
+        const elements: any[] = [];
+        for (const id of elementIds) {
+          const data = await canvasGet(`/api/elements/${id}`);
+          if (data.element) elements.push(data.element);
+        }
+        if (elements.length < 3) return err("Need at least 3 elements to distribute");
+
+        if (direction === "horizontal") {
+          elements.sort((a, b) => a.x - b.x);
+          const first = elements[0], last = elements[elements.length - 1];
+          const totalSpan = (last.x + (last.width || 0)) - first.x;
+          const totalW = elements.reduce((s, e) => s + (e.width || 0), 0);
+          const gap = (totalSpan - totalW) / (elements.length - 1);
+          let cx = first.x;
+          for (const el of elements) {
+            await canvasPut(`/api/elements/${el.id}`, { x: cx });
+            cx += (el.width || 0) + gap;
+          }
+        } else {
+          elements.sort((a, b) => a.y - b.y);
+          const first = elements[0], last = elements[elements.length - 1];
+          const totalSpan = (last.y + (last.height || 0)) - first.y;
+          const totalH = elements.reduce((s, e) => s + (e.height || 0), 0);
+          const gap = (totalSpan - totalH) / (elements.length - 1);
+          let cy = first.y;
+          for (const el of elements) {
+            await canvasPut(`/api/elements/${el.id}`, { y: cy });
+            cy += (el.height || 0) + gap;
+          }
+        }
+        return ok(`Distributed ${elements.length} elements (${direction})`);
+      } catch (e) {
+        return err(`Distribute failed: ${(e as Error).message}`);
+      }
+    },
+  );
+
+  // ─── group_elements ───
+  server.registerTool(
+    "group_elements",
+    {
+      description: "Group multiple elements together. Returns the new group ID.",
+      inputSchema: z.object({
+        elementIds: z.array(z.string()),
+      }),
+    },
+    async ({ elementIds }): Promise<CallToolResult> => {
+      try {
+        const groupId = Date.now().toString(36) + Math.random().toString(36).substring(2);
+        let count = 0;
+        for (const id of elementIds) {
+          const data = await canvasGet(`/api/elements/${id}`);
+          const el = data.element;
+          if (!el) continue;
+          const existing = el.groupIds || [];
+          await canvasPut(`/api/elements/${id}`, { groupIds: [...existing, groupId] });
+          count++;
+        }
+        return ok(`Grouped ${count} elements. Group ID: ${groupId}`);
+      } catch (e) {
+        return err(`Group failed: ${(e as Error).message}`);
+      }
+    },
+  );
+
+  // ─── ungroup_elements ───
+  server.registerTool(
+    "ungroup_elements",
+    {
+      description: "Remove a group ID from all elements that belong to it.",
+      inputSchema: z.object({
+        groupId: z.string(),
+      }),
+    },
+    async ({ groupId }): Promise<CallToolResult> => {
+      try {
+        const data = await canvasGet("/api/elements");
+        const elements = data.elements || [];
+        let count = 0;
+        for (const el of elements) {
+          if (el.groupIds && el.groupIds.includes(groupId)) {
+            await canvasPut(`/api/elements/${el.id}`, {
+              groupIds: el.groupIds.filter((g: string) => g !== groupId),
+            });
+            count++;
+          }
+        }
+        return ok(`Ungrouped ${count} elements from group ${groupId}`);
+      } catch (e) {
+        return err(`Ungroup failed: ${(e as Error).message}`);
+      }
+    },
+  );
+
+  // ─── lock_elements ───
+  server.registerTool(
+    "lock_elements",
+    {
+      description: "Lock elements to prevent modification.",
+      inputSchema: z.object({
+        elementIds: z.array(z.string()),
+      }),
+    },
+    async ({ elementIds }): Promise<CallToolResult> => {
+      try {
+        let count = 0;
+        for (const id of elementIds) {
+          await canvasPut(`/api/elements/${id}`, { locked: true });
+          count++;
+        }
+        return ok(`Locked ${count} elements`);
+      } catch (e) {
+        return err(`Lock failed: ${(e as Error).message}`);
+      }
+    },
+  );
+
+  // ─── unlock_elements ───
+  server.registerTool(
+    "unlock_elements",
+    {
+      description: "Unlock elements to allow modification.",
+      inputSchema: z.object({
+        elementIds: z.array(z.string()),
+      }),
+    },
+    async ({ elementIds }): Promise<CallToolResult> => {
+      try {
+        let count = 0;
+        for (const id of elementIds) {
+          await canvasPut(`/api/elements/${id}`, { locked: false });
+          count++;
+        }
+        return ok(`Unlocked ${count} elements`);
+      } catch (e) {
+        return err(`Unlock failed: ${(e as Error).message}`);
+      }
+    },
+  );
+
+  // ─── export_scene ───
+  server.registerTool(
+    "export_scene",
+    {
+      description: "Export the current canvas to .excalidraw JSON format. Optionally write to a file.",
+      inputSchema: z.object({
+        filePath: z.string().optional().describe("File path to write .excalidraw JSON"),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ filePath }): Promise<CallToolResult> => {
+      try {
+        const data = await canvasGet("/api/elements");
+        const elements = data.elements || [];
+        let files = {};
+        try { files = (await canvasGet("/api/files")).files || {}; } catch {}
+
+        const scene = {
+          type: "excalidraw",
+          version: 2,
+          source: "excalidraw-mcp-enhanced",
+          elements,
+          appState: { viewBackgroundColor: "#ffffff", gridSize: null },
+          ...(Object.keys(files).length > 0 ? { files } : {}),
+        };
+
+        const json = JSON.stringify(scene, null, 2);
+
+        if (filePath) {
+          const fs = await import("node:fs");
+          const path = await import("node:path");
+          const resolved = path.resolve(filePath);
+          const dir = path.dirname(resolved);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(resolved, json, "utf-8");
+          return ok(`Scene exported to ${resolved} (${elements.length} elements)`);
+        }
+        return ok(json);
+      } catch (e) {
+        return err(`Export failed: ${(e as Error).message}`);
+      }
+    },
+  );
+
+  // ─── import_scene ───
+  server.registerTool(
+    "import_scene",
+    {
+      description: "Import elements from .excalidraw JSON file or raw JSON data.",
+      inputSchema: z.object({
+        filePath: z.string().optional(),
+        data: z.string().optional(),
+        mode: z.enum(["replace", "merge"]).describe("replace clears canvas first, merge appends"),
+      }),
+    },
+    async ({ filePath, data, mode }): Promise<CallToolResult> => {
+      try {
+        let sceneData: any;
+        if (filePath) {
+          const fs = await import("node:fs");
+          const path = await import("node:path");
+          sceneData = JSON.parse(fs.readFileSync(path.resolve(filePath), "utf-8"));
+        } else if (data) {
+          sceneData = JSON.parse(data);
+        } else {
+          return err("Provide filePath or data");
+        }
+
+        const importElements = Array.isArray(sceneData) ? sceneData : (sceneData.elements || []);
+        if (importElements.length === 0) return err("No elements found in import data");
+
+        if (mode === "replace") {
+          await canvasDelete("/api/elements/clear");
+        }
+
+        const result = await canvasPost("/api/elements/batch", { elements: importElements });
+
+        // Import files if present
+        const importFiles = sceneData.files;
+        if (importFiles && typeof importFiles === "object") {
+          const fileList = Object.values(importFiles);
+          if (fileList.length > 0) {
+            try { await canvasPost("/api/files", fileList); } catch {}
+          }
+        }
+
+        return ok(`Imported ${result.count} elements (mode: ${mode})`);
+      } catch (e) {
+        return err(`Import failed: ${(e as Error).message}`);
+      }
+    },
+  );
+
+  // ─── export_to_image ───
+  server.registerTool(
+    "export_to_image",
+    {
+      description: "Export the canvas to PNG or SVG. Optionally save to file. Requires frontend open in browser.",
+      inputSchema: z.object({
+        format: z.enum(["png", "svg"]),
+        filePath: z.string().optional(),
+        background: z.boolean().optional().describe("Include background (default: true)"),
+      }),
+    },
+    async ({ format, filePath, background }): Promise<CallToolResult> => {
+      try {
+        const result = await canvasPost("/api/export/image", {
+          format,
+          background: background ?? true,
+        });
+
+        if (filePath) {
+          const fs = await import("node:fs");
+          const path = await import("node:path");
+          const resolved = path.resolve(filePath);
+          const dir = path.dirname(resolved);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          if (format === "svg") {
+            fs.writeFileSync(resolved, result.data!, "utf-8");
+          } else {
+            fs.writeFileSync(resolved, Buffer.from(result.data!, "base64"));
+          }
+          return ok(`Image exported to ${resolved} (format: ${format})`);
+        }
+
+        if (format === "png") {
+          return {
+            content: [
+              { type: "image" as const, data: result.data!, mimeType: "image/png" },
+              { type: "text", text: `PNG image exported (${result.data!.length} chars base64)` },
+            ],
+          };
+        }
+        return ok(result.data!);
+      } catch (e) {
+        return err(`Image export failed: ${(e as Error).message}`);
+      }
+    },
+  );
+
+  // ─── create_from_mermaid ───
+  server.registerTool(
+    "create_from_mermaid",
+    {
+      description: "Convert a Mermaid diagram to Excalidraw elements and render on canvas. Requires frontend open.",
+      inputSchema: z.object({
+        mermaidDiagram: z.string().describe('Mermaid diagram definition (e.g., "graph TD; A-->B;")'),
+        config: z.record(z.string(), z.any()).optional().describe("Optional Mermaid config"),
+      }),
+    },
+    async ({ mermaidDiagram, config }): Promise<CallToolResult> => {
+      try {
+        const result = await canvasPost("/api/elements/from-mermaid", {
+          mermaidDiagram,
+          config: config || {},
+        });
+        return ok(`Mermaid diagram sent for conversion.\n\n${JSON.stringify(result, null, 2)}\n\nOpen the canvas at ${EXPRESS_SERVER_URL} to see the rendered diagram.`);
+      } catch (e) {
+        return err(`Mermaid conversion failed: ${(e as Error).message}`);
+      }
+    },
+  );
+
+  // ─── clear_canvas ───
+  server.registerTool(
+    "clear_canvas",
+    {
+      description: "Remove all elements from the canvas.",
+      inputSchema: z.object({}),
+    },
+    async (): Promise<CallToolResult> => {
+      try {
+        const result = await canvasDelete("/api/elements/clear");
+        return ok(`Canvas cleared. ${result.count || 0} elements removed.`);
+      } catch (e) {
+        return err(`Clear failed: ${(e as Error).message}`);
+      }
+    },
+  );
+
+  // ─── snapshot_scene ───
+  server.registerTool(
+    "snapshot_scene",
+    {
+      description: "Save a named snapshot of the current canvas state for later restoration.",
+      inputSchema: z.object({
+        name: z.string().describe("Name for this snapshot"),
+      }),
+    },
+    async ({ name }): Promise<CallToolResult> => {
+      try {
+        const result = await canvasPost("/api/snapshots", { name });
+        return ok(`Snapshot "${name}" saved (${result.elementCount} elements)`);
+      } catch (e) {
+        return err(`Snapshot failed: ${(e as Error).message}`);
+      }
+    },
+  );
+
+  // ─── restore_snapshot ───
+  server.registerTool(
+    "restore_snapshot",
+    {
+      description: "Restore the canvas from a previously saved named snapshot.",
+      inputSchema: z.object({
+        name: z.string().describe("Name of the snapshot to restore"),
+      }),
+    },
+    async ({ name }): Promise<CallToolResult> => {
+      try {
+        const snapData = await canvasGet(`/api/snapshots/${encodeURIComponent(name)}`);
+        if (!snapData.snapshot) return err(`Snapshot "${name}" not found`);
+        // Clear and restore
+        await canvasDelete("/api/elements/clear");
+        const result = await canvasPost("/api/elements/batch", { elements: (snapData.snapshot as any).elements });
+        return ok(`Snapshot "${name}" restored (${result.count} elements)`);
+      } catch (e) {
+        return err(`Restore failed: ${(e as Error).message}`);
+      }
+    },
+  );
+
+  // ─── set_viewport ───
+  server.registerTool(
+    "set_viewport",
+    {
+      description: "Control the canvas viewport. Auto-fit all content, center on an element, or set zoom/scroll directly. Requires frontend open.",
+      inputSchema: z.object({
+        scrollToContent: z.boolean().optional().describe("Auto-fit all elements in view"),
+        scrollToElementId: z.string().optional().describe("Center view on a specific element"),
+        zoom: z.number().optional().describe("Zoom level (0.1–10, 1 = 100%)"),
+        offsetX: z.number().optional().describe("Horizontal scroll offset"),
+        offsetY: z.number().optional().describe("Vertical scroll offset"),
+      }),
+    },
+    async (args): Promise<CallToolResult> => {
+      try {
+        const result = await canvasPost("/api/viewport", args);
+        return ok(`Viewport updated: ${JSON.stringify(result)}`);
+      } catch (e) {
+        return err(`Viewport failed: ${(e as Error).message}`);
+      }
+    },
+  );
+
+  // ─── read_diagram_guide ───
+  server.registerTool(
+    "read_diagram_guide",
+    {
+      description: "Returns a comprehensive design guide for Excalidraw diagrams: colors, sizing, layout patterns, arrow binding, templates, and anti-patterns.",
+      annotations: { readOnlyHint: true },
+    },
+    async (): Promise<CallToolResult> => {
+      return ok(DIAGRAM_DESIGN_GUIDE);
+    },
+  );
 }
+
+// ─── Design Guide Content ───
+const DIAGRAM_DESIGN_GUIDE = `# Excalidraw Diagram Design Guide
+
+## Color Palette
+
+### Stroke Colors (borders & text)
+| Name    | Hex       | Use for                     |
+|---------|-----------|-----------------------------|
+| Black   | #1e1e1e   | Default text & borders      |
+| Red     | #e03131   | Errors, warnings, critical  |
+| Green   | #2f9e44   | Success, approved, healthy  |
+| Blue    | #1971c2   | Primary actions, links      |
+| Purple  | #9c36b5   | Services, middleware        |
+| Orange  | #e8590c   | Async, queues, events       |
+| Cyan    | #0c8599   | Data stores, databases      |
+| Gray    | #868e96   | Annotations, secondary      |
+
+### Fill Colors (pastel fills)
+| Name         | Hex       | Pairs with stroke |
+|--------------|-----------|-------------------|
+| Light Red    | #ffc9c9   | #e03131           |
+| Light Green  | #b2f2bb   | #2f9e44           |
+| Light Blue   | #a5d8ff   | #1971c2           |
+| Light Purple | #eebefa   | #9c36b5           |
+| Light Orange | #ffd8a8   | #e8590c           |
+| Light Cyan   | #99e9f2   | #0c8599           |
+| Light Gray   | #e9ecef   | #868e96           |
+
+## Sizing Rules
+- Minimum shape: 120×60px
+- Font sizes: body ≥16, titles ≥20, labels ≥14
+- Padding: 20px inside shapes
+- Arrow length: min 80px between shapes
+- Grid snap: 20px
+
+## Layout Patterns
+- Spacing: 40–80px between shapes
+- Flow: top-to-bottom or left-to-right
+- Cluster related elements with background zones
+
+## Arrow Binding
+- Always use startBinding/endBinding with elementId
+- Dashed for async, dotted for weak dependencies
+- Label arrows with relationship text
+
+## Anti-Patterns
+1. Overlapping elements
+2. Cramped spacing (<40px)
+3. Tiny fonts (<14px)
+4. Manual arrow coords (use bindings)
+5. Too many colors (limit 3-4 fills)
+6. Inconsistent sizes for same-role shapes
+7. Missing labels
+`;

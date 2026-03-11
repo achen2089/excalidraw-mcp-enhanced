@@ -160,6 +160,13 @@ app.put("/api/elements/:id", (req, res) => {
   res.json({ success: true, element: updated });
 });
 
+// Clear all (must be before /:id route)
+app.delete("/api/elements/clear", (_req, res) => {
+  const count = storage.clearElements();
+  broadcast({ type: "canvas_cleared", timestamp: new Date().toISOString() });
+  res.json({ success: true, message: `Cleared ${count} elements`, count });
+});
+
 // Delete element
 app.delete("/api/elements/:id", (req, res) => {
   const { id } = req.params;
@@ -170,11 +177,21 @@ app.delete("/api/elements/:id", (req, res) => {
   res.json({ success: true, message: `Element ${id} deleted` });
 });
 
-// Clear all
-app.delete("/api/elements/clear", (_req, res) => {
-  const count = storage.clearElements();
-  broadcast({ type: "canvas_cleared", timestamp: new Date().toISOString() });
-  res.json({ success: true, message: `Cleared ${count} elements`, count });
+// Convert Mermaid diagram to Excalidraw elements (via frontend)
+app.post("/api/elements/from-mermaid", (req, res) => {
+  try {
+    const { mermaidDiagram, config } = req.body;
+    if (!mermaidDiagram || typeof mermaidDiagram !== "string") {
+      return res.status(400).json({ success: false, error: "mermaidDiagram string required" });
+    }
+    if (clients.size === 0) {
+      return res.status(503).json({ success: false, error: "No frontend connected" });
+    }
+    broadcast({ type: "mermaid_convert", mermaidDiagram, config: config || {}, timestamp: new Date().toISOString() });
+    res.json({ success: true, mermaidDiagram, config: config || {}, message: "Mermaid diagram sent to frontend for conversion." });
+  } catch (error) {
+    res.status(400).json({ success: false, error: (error as Error).message });
+  }
 });
 
 // Sync from frontend (overwrite)
