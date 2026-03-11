@@ -7,6 +7,7 @@ import path from "node:path";
 import { deflateSync } from "node:zlib";
 import { z } from "zod/v4";
 import type { CheckpointStore } from "./checkpoint-store.js";
+import { registerCanvasTools } from "./canvas-tools.js";
 
 /** Maximum allowed size for element/data input strings (5 MB). */
 const MAX_INPUT_BYTES = 5 * 1024 * 1024;
@@ -399,6 +400,9 @@ Use the Primary Colors from above — they're bright enough on dark backgrounds.
  * Shared between local (main.ts) and Vercel (api/mcp.ts) entry points.
  */
 export function registerTools(server: McpServer, distDir: string, store: CheckpointStore): void {
+  // Register canvas CRUD + scene awareness tools (communicate with canvas server via HTTP)
+  registerCanvasTools(server);
+
   const resourceUri = "ui://excalidraw/mcp-app.html";
 
   // ============================================================

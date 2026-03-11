@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  canvas-server:
+    build:
+      context: .
+      target: canvas-server
+    ports:
+      - "3000:3000"
+    volumes:
+      - canvas-data:/data
+    environment:
+      - PORT=3000
+      - HOST=0.0.0.0
+      - CANVAS_STORE_PATH=/data/canvas-state.json
+
+  mcp-server:
+    build:
+      context: .
+      target: mcp-server
+    environment:
+      - EXPRESS_SERVER_URL=http://canvas-server:3000
+    depends_on:
+      - canvas-server
+    stdin_open: true
+
+volumes:
+  canvas-data:

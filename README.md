@@ -1,97 +1,108 @@
-# Excalidraw MCP App Server
+# excalidraw-mcp-enhanced
 
-MCP server that streams hand-drawn Excalidraw diagrams with smooth viewport camera control and interactive fullscreen editing.
+Fork of the official [excalidraw/excalidraw-mcp](https://github.com/excalidraw/excalidraw-mcp) with a **persistent canvas toolkit** — element-level CRUD, real-time WebSocket sync, scene awareness, and a live shared canvas.
 
-![Demo](docs/demo.gif)
+Merges the official MCP's streaming animations with [yctimlin/mcp_excalidraw](https://github.com/yctimlin/mcp_excalidraw)'s 26-tool canvas toolkit.
 
-## Install
+## Architecture
 
-Works with any client that supports [MCP Apps](https://modelcontextprotocol.io/docs/extensions/apps) — Claude, ChatGPT, VS Code, Goose, and others. If something doesn't work, please [open an issue](https://github.com/antonpk1/excalidraw-mcp-app/issues).
-
-### Remote (recommended)
-
-### `https://mcp.excalidraw.com`
-
-For apps that don't yet have an official integration, you can add a custom MCP / connector (naming can vary between apps).
-
-### Local
-
-**Option A: Download Extension**
-
-1. Download `excalidraw-mcp-app.mcpb` from [Releases](https://github.com/antonpk1/excalidraw-mcp-app/releases)
-2. Double-click to install in Claude Desktop
-
-**Option B: Build from Source**
-
-```bash
-git clone https://github.com/excalidraw/excalidraw-mcp.git
-cd excalidraw-mcp-app
-pnpm install && pnpm run build
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│   MCP Client    │────▸│   MCP Server     │────▸│  Canvas Server  │
+│ (Claude, Cursor)│stdio│  (tools/stdio)   │http │  (Express + WS) │
+└─────────────────┘     └──────────────────┘     └────────┬────────┘
+                                                          │ WebSocket
+                                                 ┌────────▼────────┐
+                                                 │  Excalidraw UI  │
+                                                 │  (browser tab)  │
+                                                 └─────────────────┘
 ```
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+**Two processes:**
+- **Canvas server** (`npm run canvas`) — Express + WebSocket on port 3000. Serves the Excalidraw UI, REST API for element CRUD, real-time sync. File-backed persistent storage.
+- **MCP server** (stdio) — All MCP tools. The official streaming tools (`read_me`, `create_view`, `export_to_excalidraw`) plus canvas CRUD tools that talk to the canvas server via HTTP.
 
-```json
+## Quick Start
+
+```bash
+# Install
+pnpm install
+
+# Start canvas server (terminal 1)
+npm run canvas
+
+# Open browser to http://localhost:3000
+
+# Configure your MCP client to use the MCP server (stdio)
+# e.g. for Claude Desktop, add to config:
 {
   "mcpServers": {
     "excalidraw": {
       "command": "node",
-      "args": ["/path/to/excalidraw-mcp-app/dist/index.js", "--stdio"]
+      "args": ["dist/index.js", "--stdio"],
+      "env": {
+        "EXPRESS_SERVER_URL": "http://localhost:3000"
+      }
     }
   }
 }
 ```
 
-Restart Claude Desktop.
+## Tools
 
-## Usage
+### Official (preserved)
+| Tool | Description |
+|------|-------------|
+| `read_me` | Element format reference, color palettes, tips |
+| `create_view` | Streaming diagram with draw-on animations (MCP Apps inline) |
+| `export_to_excalidraw` | Upload to excalidraw.com, return shareable URL |
 
-Example prompts:
-- "Draw a cute cat using excalidraw"
-- "Draw an architecture diagram showing a user connecting to an API server which talks to a database"
+### Canvas CRUD (new)
+| Tool | Description |
+|------|-------------|
+| `create_element` | Create a single element on the persistent canvas |
+| `batch_create_elements` | Create multiple elements at once |
+| `get_element` | Read a single element by ID |
+| `query_elements` | Query elements by type or properties |
+| `update_element` | Update properties of an existing element |
+| `delete_element` | Remove an element from the canvas |
+| `duplicate_elements` | Clone elements with offset |
 
-## What are MCP Apps and how can I build one?
+### Scene Awareness (new)
+| Tool | Description |
+|------|-------------|
+| `describe_scene` | Structured text description of the canvas |
+| `get_canvas_screenshot` | Screenshot of current canvas (returns PNG image) |
 
-Text responses can only go so far. Sometimes users need to interact with data, not just read about it. [MCP Apps](https://github.com/modelcontextprotocol/ext-apps/) is an official Model Context Protocol extension that lets servers return interactive HTML interfaces (data visualizations, forms, dashboards) that render directly in the chat.
+## Environment Variables
 
-- **Getting started for humans**: [documentation](https://modelcontextprotocol.io/docs/extensions/apps)
-- **Getting started for AIs**: [skill](https://github.com/modelcontextprotocol/ext-apps/blob/main/plugins/mcp-apps/skills/create-mcp-app/SKILL.md)
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `EXPRESS_SERVER_URL` | Canvas server URL (for MCP server) | `http://localhost:3000` |
+| `CANVAS_STORE_PATH` | Path to persistent JSON store | `./canvas-state.json` |
+| `HOST` | Canvas server bind address | `0.0.0.0` |
+| `PORT` | Canvas server port | `3000` |
 
-## Contributing
-
-PRs welcome! See [Local](#local) above for build instructions.
-
-### Deploy your own instance
-
-You can deploy your own copy to Vercel in a few clicks:
-
-1. Fork this repo
-2. Go to [vercel.com/new](https://vercel.com/new) and import your fork
-3. No environment variables needed — just deploy
-4. Your server will be at `https://your-project.vercel.app/mcp`
-
-### Release checklist
-
-<details>
-<summary>For maintainers</summary>
+## Docker
 
 ```bash
-# 1. Bump version in manifest.json and package.json
-# 2. Build and pack
-pnpm run build && mcpb pack .
-
-# 3. Create GitHub release
-gh release create v0.3.0 excalidraw-mcp-app.mcpb --title "v0.3.0" --notes "What changed"
-
-# 4. Deploy to Vercel
-vercel --prod
+docker-compose up
 ```
 
-</details>
+This starts both the canvas server (port 3000) and MCP server. Canvas state persists in a Docker volume.
 
-## Credits
+## Development
 
-Built with [Excalidraw](https://github.com/excalidraw/excalidraw) — a virtual whiteboard for sketching hand-drawn like diagrams.
+```bash
+# Canvas server with hot reload + Vite dev server for UI
+npm run canvas:dev
+
+# Build canvas UI
+npm run build:canvas-ui
+
+# Build MCP server
+npm run build
+```
 
 ## License
 
