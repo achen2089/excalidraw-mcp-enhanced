@@ -5,11 +5,72 @@ import {
   convertToExcalidrawElements,
   exportToBlob,
   exportToSvg,
+  serializeAsJSON,
 } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types/types";
 import type { ExcalidrawElement } from "@excalidraw/excalidraw/types/element/types";
+import { initializeApp } from "firebase/app";
+import { getStorage, ref, uploadBytes } from "firebase/storage";
+import { nanoid } from "nanoid";
 
 const AUTO_SYNC_MS = 1200;
+
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyAd15pYlMci_xIp9ko6wkEsDzAAA0Dn0RU",
+  authDomain: "excalidraw-room-persistence.firebaseapp.com",
+  databaseURL: "https://excalidraw-room-persistence.firebaseio.com",
+  projectId: "excalidraw-room-persistence",
+  storageBucket: "excalidraw-room-persistence.appspot.com",
+  messagingSenderId: "654800341332",
+  appId: "1:654800341332:web:4a692de832b55bd57ce0c1",
+};
+
+const PLUS_APP_URL = "https://app.excalidraw.com";
+
+let _firebaseApp: ReturnType<typeof initializeApp> | null = null;
+const getFirebaseStorage = () => {
+  if (!_firebaseApp) _firebaseApp = initializeApp(FIREBASE_CONFIG);
+  return getStorage(_firebaseApp);
+};
+
+async function generateEncryptionKey(): Promise<string> {
+  const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 128 }, true, ["encrypt", "decrypt"]);
+  const jwk = await crypto.subtle.exportKey("jwk", key);
+  return jwk.k!;
+}
+
+async function encryptData(key: string, data: Uint8Array): Promise<{ iv: Uint8Array; encryptedBuffer: ArrayBuffer }> {
+  const rawKey = Uint8Array.from(atob(key.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+  const cryptoKey = await crypto.subtle.importKey("raw", rawKey, "AES-GCM", false, ["encrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encryptedBuffer = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, cryptoKey, data);
+  return { iv, encryptedBuffer };
+}
+
+async function exportToExcalidrawPlus(api: ExcalidrawImperativeAPI) {
+  const elements = api.getSceneElements().filter((e) => !e.isDeleted);
+  const appState = api.getAppState();
+  const files = api.getFiles();
+
+  const storage = getFirebaseStorage();
+  const id = nanoid(12);
+  const encryptionKey = await generateEncryptionKey();
+
+  const serialized = serializeAsJSON(elements, appState, files, "database");
+  const encoded = new TextEncoder().encode(serialized);
+  const { iv, encryptedBuffer } = await encryptData(encryptionKey, encoded);
+
+  const blob = new Blob([iv, new Uint8Array(encryptedBuffer)], { type: "application/octet-stream" });
+  const storageRef = ref(storage, `/migrations/scenes/${id}`);
+  await uploadBytes(storageRef, blob, {
+    customMetadata: {
+      data: JSON.stringify({ version: 2, name: "Excalidraw MCP Export" }),
+      created: Date.now().toString(),
+    },
+  });
+
+  window.open(`${PLUS_APP_URL}/import?excalidraw=${id},${encryptionKey}`);
+}
 
 interface ServerElement {
   id: string;
@@ -232,6 +293,21 @@ export default function App() {
   }
 
   const [elementCount, setElementCount] = useState(0);
+  const [savingToPlus, setSavingToPlus] = useState(false);
+
+  const handleSaveToPlus = useCallback(async () => {
+    const a = apiRef.current;
+    if (!a || savingToPlus) return;
+    setSavingToPlus(true);
+    try {
+      await exportToExcalidrawPlus(a);
+    } catch (e) {
+      console.error("Save to Excalidraw+ failed:", e);
+      alert("Failed to save to Excalidraw+. Check console for details.");
+    } finally {
+      setSavingToPlus(false);
+    }
+  }, [savingToPlus]);
 
   // Track element count on changes
   useEffect(() => {
@@ -257,6 +333,9 @@ export default function App() {
             <div className={`status-dot ${connected ? "status-connected" : "status-disconnected"}`} />
             <span>{connected ? "Live" : "Offline"}</span>
           </div>
+          <button className="btn btn-plus" onClick={handleSaveToPlus} disabled={savingToPlus}>
+            {savingToPlus ? "Saving..." : "☁️ Save to Excalidraw+"}
+          </button>
           <button className="btn" onClick={syncToBackend}>Sync</button>
           <button className="btn btn-danger" onClick={() => { if (apiRef.current) applyScene({ elements: [] }); fetch("/api/elements/clear", { method: "DELETE" }); }}>
             Clear
