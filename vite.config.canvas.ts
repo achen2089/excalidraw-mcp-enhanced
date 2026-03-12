@@ -7,6 +7,9 @@ export default defineConfig({
   build: {
     outDir: "../../dist/canvas-ui",
     emptyOutDir: true,
+    rollupOptions: {
+      external: ["@excalidraw/mermaid-to-excalidraw"],
+    },
   },
   server: {
     port: 5174,

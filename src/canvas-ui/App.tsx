@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import "@excalidraw/excalidraw/index.css";
 import {
   Excalidraw,
   convertToExcalidrawElements,

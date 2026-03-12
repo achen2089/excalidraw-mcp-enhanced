@@ -1,6 +1,6 @@
 # Multi-stage build for excalidraw-mcp-enhanced
 FROM node:22-slim AS base
-RUN npm install -g pnpm@10
+RUN npm install -g pnpm@10 && npm install -g bun
 
 # ── Build stage ──
 FROM base AS build
@@ -15,10 +15,9 @@ RUN pnpm run build:canvas-ui
 FROM base AS canvas-server
 WORKDIR /app
 COPY --from=build /app/package.json /app/pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile --prod
+RUN pnpm install --frozen-lockfile
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/src/canvas-server ./src/canvas-server
-COPY --from=build /app/node_modules/.pnpm/tsx*/node_modules/tsx ./node_modules/tsx
 
 ENV PORT=3000
 ENV HOST=0.0.0.0
