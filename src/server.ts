@@ -498,6 +498,27 @@ Call read_me first to learn the element format.`,
 
       const checkpointId = crypto.randomUUID().replace(/-/g, "").slice(0, 18);
       await store.save(checkpointId, { elements: resolvedElements });
+
+      // Bridge: sync create_view output to the persistent canvas server
+      const canvasUrl = process.env.EXPRESS_SERVER_URL || "http://localhost:3000";
+      try {
+        // Filter out pseudo-elements (cameraUpdate, delete, restoreCheckpoint)
+        const drawableElements = resolvedElements.filter(
+          (el: any) => el.type !== "cameraUpdate" && el.type !== "delete" && el.type !== "restoreCheckpoint"
+        );
+        if (drawableElements.length > 0) {
+          // Clear and replace canvas with the streaming output
+          await fetch(`${canvasUrl}/api/elements/clear`, { method: "DELETE" }).catch(() => {});
+          await fetch(`${canvasUrl}/api/elements/batch`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ elements: drawableElements }),
+          }).catch(() => {});
+        }
+      } catch {
+        // Canvas server may not be running — that's fine
+      }
+
       return {
         content: [{ type: "text", text: `Diagram displayed! Checkpoint id: "${checkpointId}".
 If user asks to create a new diagram - simply create a new one from scratch.

@@ -230,22 +230,39 @@ export default function App() {
     }
   }
 
+  const [elementCount, setElementCount] = useState(0);
+
+  // Track element count on changes
+  useEffect(() => {
+    if (!api) return;
+    const interval = setInterval(() => {
+      const count = api.getSceneElements().filter((e) => !e.isDeleted).length;
+      setElementCount(count);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [api]);
+
   return (
     <div style={{ width: "100%", height: "100vh", display: "flex", flexDirection: "column" }}>
       <div className="header">
-        <h1>🎨 Excalidraw Canvas</h1>
-        <div className="controls">
-          <div className="status">
+        <div className="header-left">
+          <span className="header-logo">✏️</span>
+          <span className="header-title">Excalidraw MCP Enhanced</span>
+          <span className="header-badge">CANVAS</span>
+        </div>
+        <div className="header-right">
+          <span className="element-count">{elementCount} element{elementCount !== 1 ? "s" : ""}</span>
+          <div className="status-pill">
             <div className={`status-dot ${connected ? "status-connected" : "status-disconnected"}`} />
-            <span>{connected ? "Connected" : "Disconnected"}</span>
+            <span>{connected ? "Live" : "Offline"}</span>
           </div>
           <button className="btn" onClick={syncToBackend}>Sync</button>
-          <button className="btn" onClick={() => { if (apiRef.current) applyScene({ elements: [] }); fetch("/api/elements/clear", { method: "DELETE" }); }}>
+          <button className="btn btn-danger" onClick={() => { if (apiRef.current) applyScene({ elements: [] }); fetch("/api/elements/clear", { method: "DELETE" }); }}>
             Clear
           </button>
         </div>
       </div>
-      <div className="canvas-container" style={{ flex: 1 }}
+      <div className="canvas-container"
         onPointerDownCapture={() => { userInteracted.current = true; }}
         onKeyDownCapture={() => { userInteracted.current = true; }}>
         <Excalidraw

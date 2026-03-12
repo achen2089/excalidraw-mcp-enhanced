@@ -856,70 +856,80 @@ export function registerCanvasTools(server: McpServer): void {
     },
   );
 
-  // ─── read_diagram_guide ───
+  // ─── export_to_excalidraw_url ───
   server.registerTool(
-    "read_diagram_guide",
+    "export_to_excalidraw_url",
     {
-      description: "Returns a comprehensive design guide for Excalidraw diagrams: colors, sizing, layout patterns, arrow binding, templates, and anti-patterns.",
-      annotations: { readOnlyHint: true },
+      description: "Upload the current canvas to excalidraw.com and return a shareable URL. Works without the browser frontend.",
+      inputSchema: z.object({}),
     },
     async (): Promise<CallToolResult> => {
-      return ok(DIAGRAM_DESIGN_GUIDE);
+      try {
+        const { deflateSync } = await import("node:zlib");
+        const data = await canvasGet("/api/elements");
+        const elements = data.elements || [];
+        if (elements.length === 0) return err("Canvas is empty — nothing to export");
+
+        let files: Record<string, any> = {};
+        try { files = (await canvasGet("/api/files")).files || {}; } catch {}
+
+        const scene = {
+          type: "excalidraw",
+          version: 2,
+          source: "excalidraw-mcp-enhanced",
+          elements,
+          appState: { viewBackgroundColor: "#ffffff", gridSize: null },
+          ...(Object.keys(files).length > 0 ? { files } : {}),
+        };
+
+        const json = JSON.stringify(scene);
+
+        // Excalidraw v2 binary format
+        const concatBuffers = (...bufs: Uint8Array[]): Uint8Array => {
+          let total = 4;
+          for (const b of bufs) total += 4 + b.length;
+          const out = new Uint8Array(total);
+          const dv = new DataView(out.buffer);
+          dv.setUint32(0, 1);
+          let off = 4;
+          for (const b of bufs) {
+            dv.setUint32(off, b.length);
+            off += 4;
+            out.set(b, off);
+            off += b.length;
+          }
+          return out;
+        };
+        const te = new TextEncoder();
+        const fileMetadata = te.encode(JSON.stringify({}));
+        const dataBytes = te.encode(json);
+        const innerPayload = concatBuffers(fileMetadata, dataBytes);
+        const compressed = deflateSync(Buffer.from(innerPayload));
+
+        const cryptoKey = await globalThis.crypto.subtle.generateKey(
+          { name: "AES-GCM", length: 128 }, true, ["encrypt"],
+        );
+        const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+        const encrypted = await globalThis.crypto.subtle.encrypt(
+          { name: "AES-GCM", iv }, cryptoKey, compressed,
+        );
+        const encodingMeta = te.encode(JSON.stringify({
+          version: 2, compression: "pako@1", encryption: "AES-GCM",
+        }));
+        const payload = Buffer.from(concatBuffers(encodingMeta, iv, new Uint8Array(encrypted)));
+
+        const res = await fetch("https://json.excalidraw.com/api/v2/post/", {
+          method: "POST", body: payload,
+        });
+        if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+        const { id } = (await res.json()) as { id: string };
+        const jwk = await globalThis.crypto.subtle.exportKey("jwk", cryptoKey);
+        const url = `https://excalidraw.com/#json=${id},${jwk.k}`;
+
+        return ok(`Canvas exported to Excalidraw:\n${url}`);
+      } catch (e) {
+        return err(`Export failed: ${(e as Error).message}`);
+      }
     },
   );
 }
-
-// ─── Design Guide Content ───
-const DIAGRAM_DESIGN_GUIDE = `# Excalidraw Diagram Design Guide
-
-## Color Palette
-
-### Stroke Colors (borders & text)
-| Name    | Hex       | Use for                     |
-|---------|-----------|-----------------------------|
-| Black   | #1e1e1e   | Default text & borders      |
-| Red     | #e03131   | Errors, warnings, critical  |
-| Green   | #2f9e44   | Success, approved, healthy  |
-| Blue    | #1971c2   | Primary actions, links      |
-| Purple  | #9c36b5   | Services, middleware        |
-| Orange  | #e8590c   | Async, queues, events       |
-| Cyan    | #0c8599   | Data stores, databases      |
-| Gray    | #868e96   | Annotations, secondary      |
-
-### Fill Colors (pastel fills)
-| Name         | Hex       | Pairs with stroke |
-|--------------|-----------|-------------------|
-| Light Red    | #ffc9c9   | #e03131           |
-| Light Green  | #b2f2bb   | #2f9e44           |
-| Light Blue   | #a5d8ff   | #1971c2           |
-| Light Purple | #eebefa   | #9c36b5           |
-| Light Orange | #ffd8a8   | #e8590c           |
-| Light Cyan   | #99e9f2   | #0c8599           |
-| Light Gray   | #e9ecef   | #868e96           |
-
-## Sizing Rules
-- Minimum shape: 120×60px
-- Font sizes: body ≥16, titles ≥20, labels ≥14
-- Padding: 20px inside shapes
-- Arrow length: min 80px between shapes
-- Grid snap: 20px
-
-## Layout Patterns
-- Spacing: 40–80px between shapes
-- Flow: top-to-bottom or left-to-right
-- Cluster related elements with background zones
-
-## Arrow Binding
-- Always use startBinding/endBinding with elementId
-- Dashed for async, dotted for weak dependencies
-- Label arrows with relationship text
-
-## Anti-Patterns
-1. Overlapping elements
-2. Cramped spacing (<40px)
-3. Tiny fonts (<14px)
-4. Manual arrow coords (use bindings)
-5. Too many colors (limit 3-4 fills)
-6. Inconsistent sizes for same-role shapes
-7. Missing labels
-`;
